@@ -1,69 +1,37 @@
-# 3D face reconstruction from front and side images
-This code is the result of the work related to my master thesis. The goal of my thesis was to reconstruct 3D faces from front and side images. This was achieved through building on the works in [PRN](https://github.com/YadiraF/PRNet).
+# 🧑 3D Face Reconstruction
 
-![CED curve for out network vs PRN](https://i.imgur.com/Zqw2Mjy.png)
+Upload a frontal and side face image to reconstruct an interactive 3D face mesh in your browser.
 
-The code contains:
- * a demo for the proposed method, taking a frontal and side image and generating a 3D facial mesh (.obj)
- * a new network which predicts position maps from 2 image inputs
- * training code to train the new network
- * evaluation code for use on the [MICC Florence dataset](https://www.micc.unifi.it/resources/datasets/florence-3d-faces/)
- * code for reading and generating training data for our network from [300W-LP](http://www.cbsr.ia.ac.cn/users/xiangyuzhu/projects/3DDFA/main.htm)
+Built using a deep learning position map prediction network based on [PRN](https://github.com/YadiraF/PRNet), with a custom dual-input architecture that takes both front and side views for improved reconstruction accuracy.
 
- 
+**[Try the live demo →](https://face-reconstruction-yhuvbwontuvtgmdjxxev42.streamlit.app/)**
 
-## Getting Started
+![CED curve](https://i.imgur.com/Zqw2Mjy.png)
 
-### Prerequisite
-* Python 3.6 (numpy, skimage, scipy)
+## Features
 
-* TensorFlow-gpu = 1.15.0
+- Upload front + side image pair, or a single image
+- Real-time 3D face mesh reconstruction
+- Interactive 3D visualization (rotate, zoom)
+- Runs entirely on CPU — no GPU required
 
-* keras = 2.3.1
+## How It Works
 
-* dlib
+1. Face detection using OpenCV DNN (ResNet-10 SSD)
+2. Face cropping and alignment via similarity transform
+3. Position map prediction using a MobileNet-v2 based network (ONNX)
+4. 3D mesh extraction and colorization from the input image
 
-* opencv2 
+## Local Development
 
-#### Anaconda
-This conda environment was able to run demo.py on a Windows computer with GTX 1070 GPU on 09.06.2020.
- ```bash
-conda create --name face-recon python=3.6
-conda activate face-recon
-conda install -c anaconda scipy
-conda install -c anaconda scikit-image
-conda install -c conda-forge dlib
-conda install -c conda-forge opencv
-conda install -c anaconda keras-gpu
- ```
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-### Usage
+## Tech Stack
 
- 1. Clone the repository.
-  ```bash
-  git clone https://github.com/olalium/face-reconstruction
-  cd face-reconstruction
-  ```
- 
- 2. Clone the ICP repository to face-reconstruction folder.
-  ```bash
-  git clone https://github.com/ClayFlannigan/icp
-  ```
- 3. Clone face3d repository to face-reconstruction folder.
-  ```bash
-  git clone https://github.com/YadiraF/face3d
-  ```
- 4. Download trained model and shape predictor for keypoints (Not for long hopefully..)
- 
-  Navigate to the net-data folder
-  ```bash
-  cd Data/net-data
-  ```
-  add the files from this folder:
-  https://drive.google.com/drive/folders/13Y8zCnvccDq7bwSuwGoQWawFxlD-tCMX?usp=sharing
-
- 5. Run demo
-  ```bash
-  cd ../..
-  python demo.py
- ```
+- **Inference**: ONNX Runtime
+- **Face Detection**: OpenCV DNN
+- **Frontend**: Streamlit + Plotly
+- **3D Visualization**: Plotly Mesh3d
