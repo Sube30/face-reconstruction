@@ -212,7 +212,8 @@ def process_images(front_img, side_img, face_net, pos_predictor, triangles, face
 
     result_side = get_cropping_transformation(side_img, face_net)
     if result_side is None:
-        raise ValueError("No face detected in the side image. Please try a different image.")
+        # Fallback: use the front image's transform for the side image too
+        result_side = result_front
     l68_side, cropping_tform_side = result_side
 
     # Crop and predict
