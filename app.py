@@ -303,11 +303,8 @@ front_img = None
 side_img = None
 
 if input_mode == "Upload images":
-    col1, col2 = st.columns(2)
-    with col1:
-        front_file = st.file_uploader("Front face image", type=["jpg", "jpeg", "png"])
-    with col2:
-        side_file = st.file_uploader("Side face image", type=["jpg", "jpeg", "png"])
+    front_file = st.sidebar.file_uploader("Front face image", type=["jpg", "jpeg", "png"], key="front_upload")
+    side_file = st.sidebar.file_uploader("Side face image", type=["jpg", "jpeg", "png"], key="side_upload")
 
     if front_file and side_file:
         front_img = imread(front_file)[:, :, :3]
