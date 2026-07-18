@@ -22,3 +22,7 @@ Upload a frontal and side face image to reconstruct an interactive 3D face mesh 
 pip install -r requirements.txt
 streamlit run app.py
 ```
+
+## Acknowledgement
+
+Originally cloned from [olalium/face-reconstruction](https://github.com/olalium/face-reconstruction) and modified with different face detectors and  deployed in streamlit.
