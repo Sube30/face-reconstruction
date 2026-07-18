@@ -36,9 +36,32 @@ def load_models():
         st.error("Model file not found: Data/net-data/model.onnx. Please ensure it is committed to the repository.")
         st.stop()
 
-    # OpenCV Haar cascade face detector (bundled with opencv)
-    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-    face_cascade = cv2.CascadeClassifier(cascade_path)
+    # OpenCV DNN face detector (SSD model bundled with opencv)
+    prototxt_path = os.path.join(os.path.dirname(cv2.__file__), 'data', 'deploy.prototxt')
+    caffemodel_path = os.path.join(os.path.dirname(cv2.__file__), 'data', 'res10_300x300_ssd_iter_140000_fp16.caffemodel')
+
+    # If not bundled at that path, download them
+    model_dir = 'Data/net-data'
+    if not os.path.exists(prototxt_path):
+        prototxt_path = os.path.join(model_dir, 'deploy.prototxt')
+    if not os.path.exists(caffemodel_path):
+        caffemodel_path = os.path.join(model_dir, 'res10_300x300_ssd_iter_140000_fp16.caffemodel')
+
+    if not os.path.exists(prototxt_path) or not os.path.exists(caffemodel_path):
+        # Download OpenCV's face detection model
+        import urllib.request
+        base_url = 'https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/'
+        raw_url = 'https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830/'
+        os.makedirs(model_dir, exist_ok=True)
+        if not os.path.exists(prototxt_path):
+            urllib.request.urlretrieve(base_url + 'deploy.prototxt', prototxt_path)
+        if not os.path.exists(caffemodel_path):
+            urllib.request.urlretrieve(
+                raw_url + 'res10_300x300_ssd_iter_140000_fp16.caffemodel',
+                caffemodel_path
+            )
+
+    face_net = cv2.dnn.readNetFromCaffe(prototxt_path, caffemodel_path)
 
     pos_predictor = MobilenetPosPredictor(256, 256)
     pos_predictor.restore_onnx(onnx_path)
@@ -46,7 +69,7 @@ def load_models():
     triangles = np.loadtxt('Data/uv-data/triangles.txt').astype(np.int32)
     face_ind = np.loadtxt('Data/uv-data/face_ind.txt').astype(np.int32)
 
-    return face_cascade, pos_predictor, triangles, face_ind
+    return face_net, pos_predictor, triangles, face_ind
 
 
 # --- Helper functions ---
@@ -59,46 +82,67 @@ def mask_pos(pos):
     return masked_pos
 
 
-def get_cropping_transformation(image, face_cascade):
-    """Detect face using OpenCV Haar cascade and compute cropping transform."""
-    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+def detect_face_dnn(image, face_net):
+    """Detect face using OpenCV's DNN SSD face detector. Returns (left, top, right, bottom) or None."""
+    h, w = image.shape[:2]
+    blob = cv2.dnn.blobFromImage(image, 1.0, (300, 300), (104.0, 177.0, 123.0), swapRB=False)
+    face_net.setInput(blob)
+    detections = face_net.forward()
 
-    if len(faces) == 0:
-        # Retry with more lenient params
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=3, minSize=(30, 30))
-        if len(faces) == 0:
-            return None
+    best_conf = 0
+    best_box = None
+    for i in range(detections.shape[2]):
+        confidence = detections[0, 0, i, 2]
+        if confidence > 0.5 and confidence > best_conf:
+            best_conf = confidence
+            box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+            best_box = box.astype(int)
 
-    # Pick the largest face
-    areas = [w * h for (x, y, w, h) in faces]
-    idx = np.argmax(areas)
-    x, y, w, h = faces[idx]
+    if best_box is None:
+        # Lower threshold retry
+        for i in range(detections.shape[2]):
+            confidence = detections[0, 0, i, 2]
+            if confidence > 0.3 and confidence > best_conf:
+                best_conf = confidence
+                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                best_box = box.astype(int)
 
-    left = x
-    right = x + w
-    top = y
-    bottom = y + h
+    return best_box
 
-    old_size = (w + h) / 2
-    center = np.array([left + w / 2.0, top + h / 2.0 + old_size * 0.14])
+
+def get_cropping_transformation(image, face_net):
+    """Detect face using OpenCV DNN and compute cropping transform."""
+    box = detect_face_dnn(image, face_net)
+    if box is None:
+        return None
+
+    left, top, right, bottom = box
+    # Clamp to image bounds
+    h, w = image.shape[:2]
+    left = max(0, left)
+    top = max(0, top)
+    right = min(w, right)
+    bottom = min(h, bottom)
+
+    bw = right - left
+    bh = bottom - top
+
+    old_size = (bw + bh) / 2
+    center = np.array([left + bw / 2.0, top + bh / 2.0 + old_size * 0.14])
     size = int(old_size * 1.58)
 
-    # Generate approximate 68 landmarks from the bounding box
-    # (simplified - evenly spaced points along face contour for visualization only)
+    # Generate approximate 68 landmarks from the bounding box (for visualization)
     coords = np.zeros((68, 2), dtype=int)
-    # Jaw line (0-16)
     for i in range(17):
-        coords[i] = [int(left + (w * i / 16)), int(top + h * 0.6 + (h * 0.4 * abs(i - 8) / 8))]
-    # Approximate other landmarks relative to bbox
-    cx, cy = int(left + w / 2), int(top + h / 2)
-    coords[27] = [cx, int(top + h * 0.3)]  # nose bridge top
-    coords[30] = [cx, int(top + h * 0.55)]  # nose tip
-    coords[33] = [cx, int(top + h * 0.6)]  # nose bottom
-    coords[36] = [int(left + w * 0.25), int(top + h * 0.35)]  # left eye
-    coords[45] = [int(left + w * 0.75), int(top + h * 0.35)]  # right eye
-    coords[48] = [int(left + w * 0.3), int(top + h * 0.75)]  # mouth left
-    coords[54] = [int(left + w * 0.7), int(top + h * 0.75)]  # mouth right
+        coords[i] = [int(left + (bw * i / 16)), int(top + bh * 0.6 + (bh * 0.4 * abs(i - 8) / 8))]
+    cx = int(left + bw / 2)
+    coords[27] = [cx, int(top + bh * 0.3)]
+    coords[30] = [cx, int(top + bh * 0.55)]
+    coords[33] = [cx, int(top + bh * 0.6)]
+    coords[36] = [int(left + bw * 0.25), int(top + bh * 0.35)]
+    coords[45] = [int(left + bw * 0.75), int(top + bh * 0.35)]
+    coords[48] = [int(left + bw * 0.3), int(top + bh * 0.75)]
+    coords[54] = [int(left + bw * 0.7), int(top + bh * 0.75)]
 
     src_pts = np.array([
         [center[0] - size / 2, center[1] - size / 2],
@@ -164,7 +208,7 @@ def plot_vertices_on_image_from_pos(pos, l68, front_img):
     return plotted_front_img
 
 
-def process_images(front_img, side_img, face_cascade, pos_predictor, triangles, face_ind):
+def process_images(front_img, side_img, face_net, pos_predictor, triangles, face_ind):
     """Run the full reconstruction pipeline."""
 
     # Resize if too large
@@ -183,12 +227,12 @@ def process_images(front_img, side_img, face_cascade, pos_predictor, triangles, 
         side_img = np.around(side_img, decimals=1).astype(np.uint8)
 
     # Detect faces and get cropping transforms
-    result_front = get_cropping_transformation(front_img, face_cascade)
+    result_front = get_cropping_transformation(front_img, face_net)
     if result_front is None:
         raise ValueError("No face detected in the front image. Please try a different image.")
     l68_front, cropping_tform_front = result_front
 
-    result_side = get_cropping_transformation(side_img, face_cascade)
+    result_side = get_cropping_transformation(side_img, face_net)
     if result_side is None:
         raise ValueError("No face detected in the side image. Please try a different image.")
     l68_side, cropping_tform_side = result_side
@@ -236,7 +280,7 @@ def process_images(front_img, side_img, face_cascade, pos_predictor, triangles, 
 
 
 # --- Load models ---
-face_cascade, pos_predictor, triangles, face_ind = load_models()
+face_net, pos_predictor, triangles, face_ind = load_models()
 
 
 def create_3d_point_cloud(vertices, colors):
@@ -352,7 +396,7 @@ if front_img is not None and side_img is not None:
         with st.spinner("Processing... (this may take a moment on CPU)"):
             try:
                 obj_content, projected_img, cropped_front, cropped_side, vertices_3d, colors_rgb = process_images(
-                    front_img, side_img, face_cascade,
+                    front_img, side_img, face_net,
                     pos_predictor, triangles, face_ind
                 )
 
