@@ -3,7 +3,6 @@ import tempfile
 import warnings
 
 import cv2
-import mediapipe as mp
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
@@ -14,33 +13,6 @@ from Networks.predictor import MobilenetPosPredictor
 from Utils.write import write_obj_with_colors
 
 warnings.filterwarnings('ignore', category=DeprecationWarning)
-
-# --- MediaPipe 68-landmark mapping ---
-# Map MediaPipe's 468 face mesh indices to approximate dlib's 68 landmark points
-MEDIAPIPE_TO_68 = [
-    # Jaw (0-16)
-    162, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323,
-    # This is approximate - we use 17 jaw points
-    # Left eyebrow (17-21)
-    70, 63, 105, 66, 107,
-    # Right eyebrow (22-26)
-    336, 296, 334, 293, 300,
-    # Nose bridge (27-30)
-    168, 6, 197, 195,
-    # Nose bottom (31-35)
-    5, 4, 1, 19, 94,
-    # Left eye (36-41)
-    33, 160, 158, 133, 153, 144,
-    # Right eye (42-47)
-    362, 385, 387, 263, 373, 380,
-    # Outer lips (48-59)
-    61, 39, 37, 0, 267, 269, 291, 405, 314, 17, 84, 181,
-    # Inner lips (60-67)
-    78, 82, 13, 312, 308, 317, 14, 87,
-]
-# Trim to exactly 68 points
-MEDIAPIPE_TO_68 = MEDIAPIPE_TO_68[:68]
-
 
 # --- Page config ---
 st.set_page_config(
@@ -87,14 +59,9 @@ def load_models():
             st.error("ONNX model not found and TensorFlow not available to convert. Please provide the .onnx model file.")
             st.stop()
 
-    # Initialize MediaPipe Face Mesh
-    mp_face_mesh = mp.solutions.face_mesh
-    face_mesh = mp_face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=1,
-        refine_landmarks=True,
-        min_detection_confidence=0.5,
-    )
+    # OpenCV Haar cascade face detector (bundled with opencv)
+    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+    face_cascade = cv2.CascadeClassifier(cascade_path)
 
     pos_predictor = MobilenetPosPredictor(256, 256)
     pos_predictor.restore(model_path)
@@ -102,7 +69,7 @@ def load_models():
     triangles = np.loadtxt('Data/uv-data/triangles.txt').astype(np.int32)
     face_ind = np.loadtxt('Data/uv-data/face_ind.txt').astype(np.int32)
 
-    return face_mesh, pos_predictor, triangles, face_ind
+    return face_cascade, pos_predictor, triangles, face_ind
 
 
 # --- Helper functions ---
@@ -115,38 +82,46 @@ def mask_pos(pos):
     return masked_pos
 
 
-def get_cropping_transformation(image, face_mesh):
-    """Detect face and extract 68 landmarks using MediaPipe, then compute cropping transform."""
-    h, w, _ = image.shape
-    # MediaPipe expects RGB
-    results = face_mesh.process(image)
+def get_cropping_transformation(image, face_cascade):
+    """Detect face using OpenCV Haar cascade and compute cropping transform."""
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
 
-    if not results.multi_face_landmarks:
-        return None
+    if len(faces) == 0:
+        # Retry with more lenient params
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=3, minSize=(30, 30))
+        if len(faces) == 0:
+            return None
 
-    landmarks = results.multi_face_landmarks[0]
+    # Pick the largest face
+    areas = [w * h for (x, y, w, h) in faces]
+    idx = np.argmax(areas)
+    x, y, w, h = faces[idx]
 
-    # Extract all 468 landmarks as pixel coords
-    all_lm = np.array([(lm.x * w, lm.y * h) for lm in landmarks.landmark])
+    left = x
+    right = x + w
+    top = y
+    bottom = y + h
 
-    # Map to 68-point subset
-    coords = np.zeros((68, 2), dtype=int)
-    for i, mp_idx in enumerate(MEDIAPIPE_TO_68):
-        if mp_idx < len(all_lm):
-            coords[i] = all_lm[mp_idx].astype(int)
-
-    # Compute bounding box from landmarks
-    x_min, y_min = coords.min(axis=0)
-    x_max, y_max = coords.max(axis=0)
-
-    left = int(x_min)
-    right = int(x_max)
-    top = int(y_min)
-    bottom = int(y_max)
-
-    old_size = (right - left + bottom - top) / 2
-    center = np.array([right - (right - left) / 2.0, bottom - (bottom - top) / 2.0 + old_size * 0.14])
+    old_size = (w + h) / 2
+    center = np.array([left + w / 2.0, top + h / 2.0 + old_size * 0.14])
     size = int(old_size * 1.58)
+
+    # Generate approximate 68 landmarks from the bounding box
+    # (simplified - evenly spaced points along face contour for visualization only)
+    coords = np.zeros((68, 2), dtype=int)
+    # Jaw line (0-16)
+    for i in range(17):
+        coords[i] = [int(left + (w * i / 16)), int(top + h * 0.6 + (h * 0.4 * abs(i - 8) / 8))]
+    # Approximate other landmarks relative to bbox
+    cx, cy = int(left + w / 2), int(top + h / 2)
+    coords[27] = [cx, int(top + h * 0.3)]  # nose bridge top
+    coords[30] = [cx, int(top + h * 0.55)]  # nose tip
+    coords[33] = [cx, int(top + h * 0.6)]  # nose bottom
+    coords[36] = [int(left + w * 0.25), int(top + h * 0.35)]  # left eye
+    coords[45] = [int(left + w * 0.75), int(top + h * 0.35)]  # right eye
+    coords[48] = [int(left + w * 0.3), int(top + h * 0.75)]  # mouth left
+    coords[54] = [int(left + w * 0.7), int(top + h * 0.75)]  # mouth right
 
     src_pts = np.array([
         [center[0] - size / 2, center[1] - size / 2],
@@ -212,7 +187,7 @@ def plot_vertices_on_image_from_pos(pos, l68, front_img):
     return plotted_front_img
 
 
-def process_images(front_img, side_img, face_mesh, pos_predictor, triangles, face_ind):
+def process_images(front_img, side_img, face_cascade, pos_predictor, triangles, face_ind):
     """Run the full reconstruction pipeline."""
 
     # Resize if too large
@@ -231,12 +206,12 @@ def process_images(front_img, side_img, face_mesh, pos_predictor, triangles, fac
         side_img = np.around(side_img, decimals=1).astype(np.uint8)
 
     # Detect faces and get cropping transforms
-    result_front = get_cropping_transformation(front_img, face_mesh)
+    result_front = get_cropping_transformation(front_img, face_cascade)
     if result_front is None:
         raise ValueError("No face detected in the front image. Please try a different image.")
     l68_front, cropping_tform_front = result_front
 
-    result_side = get_cropping_transformation(side_img, face_mesh)
+    result_side = get_cropping_transformation(side_img, face_cascade)
     if result_side is None:
         raise ValueError("No face detected in the side image. Please try a different image.")
     l68_side, cropping_tform_side = result_side
@@ -284,7 +259,7 @@ def process_images(front_img, side_img, face_mesh, pos_predictor, triangles, fac
 
 
 # --- Load models ---
-face_mesh, pos_predictor, triangles, face_ind = load_models()
+face_cascade, pos_predictor, triangles, face_ind = load_models()
 
 
 def create_3d_point_cloud(vertices, colors):
@@ -400,7 +375,7 @@ if front_img is not None and side_img is not None:
         with st.spinner("Processing... (this may take a moment on CPU)"):
             try:
                 obj_content, projected_img, cropped_front, cropped_side, vertices_3d, colors_rgb = process_images(
-                    front_img, side_img, face_mesh,
+                    front_img, side_img, face_cascade,
                     pos_predictor, triangles, face_ind
                 )
 
