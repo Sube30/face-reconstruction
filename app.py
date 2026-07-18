@@ -35,6 +35,19 @@ def load_models():
     face_detector_path = 'Data/net-data/mmod_human_face_detector.dat'
     shape_predictor_path = 'Data/net-data/shape_predictor_68_face_landmarks.dat'
 
+    # Auto-download model files if not present (for cloud deployment)
+    os.makedirs('Data/net-data', exist_ok=True)
+    if not os.path.exists(model_path) or not os.path.exists(shape_predictor_path):
+        try:
+            import gdown
+            gdown.download_folder(
+                'https://drive.google.com/drive/folders/13Y8zCnvccDq7bwSuwGoQWawFxlD-tCMX',
+                output='Data/net-data/', quiet=False
+            )
+        except Exception as e:
+            st.error(f"Failed to download model files: {e}. Please add them manually to Data/net-data/")
+            st.stop()
+
     face_detector = dlib.cnn_face_detection_model_v1(face_detector_path)
     shape_predictor = dlib.shape_predictor(shape_predictor_path)
 
