@@ -9,15 +9,18 @@ class MobilenetPosPredictor():
         self.MaxPos = resolution_inp * 1.1
         self.session = None
 
+    def restore_onnx(self, onnx_path):
+        """Load an ONNX model directly. No TensorFlow dependency."""
+        self.session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
+        self.input_name = self.session.get_inputs()[0].name
+
     def restore(self, model_path):
-        # Use ONNX model if available, fall back to .h5 with TF
-        onnx_path = model_path.replace('.h5', '.onnx')
+        """Legacy restore: try ONNX first, fall back to TF/Keras .h5."""
         import os
+        onnx_path = model_path.replace('.h5', '.onnx')
         if os.path.exists(onnx_path):
-            self.session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
-            self.input_name = self.session.get_inputs()[0].name
+            self.restore_onnx(onnx_path)
         else:
-            # Fallback to TensorFlow
             import tensorflow as tf
             from Networks import mobilenet_v2
             self.model = tf.keras.models.load_model(

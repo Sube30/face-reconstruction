@@ -30,41 +30,18 @@ st.markdown(
 # --- Cached model loading ---
 @st.cache_resource(show_spinner="Loading models...")
 def load_models():
-    model_path = 'Data/net-data/trained_fg_then_real.h5'
+    onnx_path = 'Data/net-data/model.onnx'
 
-    # Auto-download model files if not present (for cloud deployment)
-    os.makedirs('Data/net-data', exist_ok=True)
-    onnx_path = model_path.replace('.h5', '.onnx')
-    if not os.path.exists(onnx_path) and not os.path.exists(model_path):
-        try:
-            import gdown
-            gdown.download_folder(
-                'https://drive.google.com/drive/folders/13Y8zCnvccDq7bwSuwGoQWawFxlD-tCMX',
-                output='Data/net-data/', quiet=False
-            )
-        except Exception as e:
-            st.error(f"Failed to download model files: {e}. Please add them manually to Data/net-data/")
-            st.stop()
-
-    # Convert h5 to onnx if onnx not present
-    if not os.path.exists(onnx_path) and os.path.exists(model_path):
-        try:
-            import tensorflow as tf
-            from Networks import mobilenet_v2
-            tf_model = tf.keras.models.load_model(model_path, custom_objects={'relu6': mobilenet_v2.relu6}, compile=False)
-            import tf2onnx
-            spec = (tf.TensorSpec((1, 256, 256, 6), tf.float32),)
-            tf2onnx.convert.from_keras(tf_model, input_signature=spec, output_path=onnx_path)
-        except ImportError:
-            st.error("ONNX model not found and TensorFlow not available to convert. Please provide the .onnx model file.")
-            st.stop()
+    if not os.path.exists(onnx_path):
+        st.error("Model file not found: Data/net-data/model.onnx. Please ensure it is committed to the repository.")
+        st.stop()
 
     # OpenCV Haar cascade face detector (bundled with opencv)
     cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
     face_cascade = cv2.CascadeClassifier(cascade_path)
 
     pos_predictor = MobilenetPosPredictor(256, 256)
-    pos_predictor.restore(model_path)
+    pos_predictor.restore_onnx(onnx_path)
 
     triangles = np.loadtxt('Data/uv-data/triangles.txt').astype(np.int32)
     face_ind = np.loadtxt('Data/uv-data/face_ind.txt').astype(np.int32)
