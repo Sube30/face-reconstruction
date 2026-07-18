@@ -24,7 +24,7 @@ st.set_page_config(
 
 st.title("🧑 3D Face Reconstruction")
 st.markdown(
-    "Upload a **frontal** and **side** face image to reconstruct a 3D face mesh. "
+    "Upload a **frontal** and **side** face image, or just a **single** image to reconstruct a 3D face mesh."
 )
 
 
@@ -297,18 +297,28 @@ def create_3d_point_cloud(vertices, colors):
 
 # --- Sidebar: choose input mode ---
 st.sidebar.header("Input")
-input_mode = st.sidebar.radio("Choose input source:", ["Upload images", "Use test images"])
+input_mode = st.sidebar.radio("Choose input source:", ["Upload images (pair)", "Upload single image", "Use test images"])
 
 front_img = None
 side_img = None
+single_mode = False
 
-if input_mode == "Upload images":
+if input_mode == "Upload images (pair)":
     front_file = st.sidebar.file_uploader("Front face image", type=["jpg", "jpeg", "png"], key="front_upload")
     side_file = st.sidebar.file_uploader("Side face image", type=["jpg", "jpeg", "png"], key="side_upload")
 
     if front_file and side_file:
         front_img = imread(front_file)[:, :, :3]
         side_img = imread(side_file)[:, :, :3]
+
+elif input_mode == "Upload single image":
+    single_file = st.sidebar.file_uploader("Face image", type=["jpg", "jpeg", "png"], key="single_upload")
+    st.sidebar.caption("The same image will be used as both front and side input.")
+
+    if single_file:
+        front_img = imread(single_file)[:, :, :3]
+        side_img = front_img.copy()
+        single_mode = True
 
 else:
     # List available test folders
@@ -325,11 +335,16 @@ else:
 
 # --- Show inputs and run reconstruction ---
 if front_img is not None and side_img is not None:
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.image(front_img, caption="Front", width='stretch')
-    with col2:
-        st.image(side_img, caption="Side", width='stretch')
+    if single_mode:
+        col1, col3 = st.columns(2)
+        with col1:
+            st.image(front_img, caption="Input Image", width='stretch')
+    else:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.image(front_img, caption="Front", width='stretch')
+        with col2:
+            st.image(side_img, caption="Side", width='stretch')
 
     if st.button("🔄 Reconstruct 3D Face", type="primary", width='stretch'):
         with st.spinner("Processing... (this may take a moment on CPU)"):
