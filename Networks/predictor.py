@@ -1,10 +1,5 @@
-import os
 import numpy as np
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-import tensorflow as tf
-
-from Networks import mobilenet_v2
+import onnxruntime as ort
 
 
 class MobilenetPosPredictor():
@@ -12,37 +7,32 @@ class MobilenetPosPredictor():
         self.resolution_inp = resolution_inp
         self.resolution_op = resolution_op
         self.MaxPos = resolution_inp * 1.1
-        self.model = None
-
-        # Configure GPU memory growth for TF2
-        gpus = tf.config.list_physical_devices('GPU')
-        if gpus:
-            try:
-                for gpu in gpus:
-                    tf.config.experimental.set_memory_growth(gpu, True)
-            except RuntimeError as e:
-                print(f"GPU config error: {e}")
+        self.session = None
 
     def restore(self, model_path):
-        try:
-            # Try TF2/Keras 2 style loading
-            from tensorflow import keras
-            self.model = keras.models.load_model(
-                model_path,
-                custom_objects={'relu6': mobilenet_v2.relu6},
-                compile=False
-            )
-        except Exception:
-            # Fallback for Keras 3
+        # Use ONNX model if available, fall back to .h5 with TF
+        onnx_path = model_path.replace('.h5', '.onnx')
+        import os
+        if os.path.exists(onnx_path):
+            self.session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
+            self.input_name = self.session.get_inputs()[0].name
+        else:
+            # Fallback to TensorFlow
+            import tensorflow as tf
+            from Networks import mobilenet_v2
             self.model = tf.keras.models.load_model(
                 model_path,
                 custom_objects={'relu6': mobilenet_v2.relu6},
                 compile=False
             )
+            self.session = None
 
     def predict(self, image):
-        x = image[np.newaxis, :, :, :]
-        pos = self.model.predict(x=x, verbose=0)
+        x = image[np.newaxis, :, :, :].astype(np.float32)
+        if self.session is not None:
+            pos = self.session.run(None, {self.input_name: x})[0]
+        else:
+            pos = self.model.predict(x=x, verbose=0)
         pos = np.squeeze(pos)
         return pos * self.MaxPos
 

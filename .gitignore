@@ -5,4 +5,5 @@ face3d/
 *.dat
 .venv/
 *__pycache__*
-Data/net-data/
+Data/net-data/*.h5
+Data/net-data/*.dat

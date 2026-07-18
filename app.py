@@ -48,6 +48,20 @@ def load_models():
             st.error(f"Failed to download model files: {e}. Please add them manually to Data/net-data/")
             st.stop()
 
+    # Convert h5 to onnx if onnx not present (needed for Python 3.14+ where TF unavailable)
+    onnx_path = model_path.replace('.h5', '.onnx')
+    if not os.path.exists(onnx_path) and os.path.exists(model_path):
+        try:
+            import tensorflow as tf
+            from Networks import mobilenet_v2
+            tf_model = tf.keras.models.load_model(model_path, custom_objects={'relu6': mobilenet_v2.relu6}, compile=False)
+            import tf2onnx
+            spec = (tf.TensorSpec((1, 256, 256, 6), tf.float32),)
+            tf2onnx.convert.from_keras(tf_model, input_signature=spec, output_path=onnx_path)
+        except ImportError:
+            st.error("ONNX model not found and TensorFlow not available to convert. Please provide model.onnx")
+            st.stop()
+
     face_detector = dlib.cnn_face_detection_model_v1(face_detector_path)
     shape_predictor = dlib.shape_predictor(shape_predictor_path)
 
