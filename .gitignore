@@ -3,9 +3,6 @@ icp/
 face3d/
 *.h5
 *.dat
-*.jpg
-*.PNG
-*.png
-*.jpeg
-*.obj
+.venv/
 *__pycache__*
+Data/net-data/

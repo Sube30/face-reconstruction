@@ -11,10 +11,12 @@
 
 from contextlib import redirect_stdout
 
-from keras import backend as K
-from keras.layers import Activation, BatchNormalization, Add, DepthwiseConv2D
-from keras.layers import Input, Conv2D, Conv2DTranspose
-from keras.models import Model
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import backend as K
+from tensorflow.keras.layers import Activation, BatchNormalization, Add, DepthwiseConv2D
+from tensorflow.keras.layers import Input, Conv2D, Conv2DTranspose
+from tensorflow.keras.models import Model
 
 
 def _make_divisible(v, divisor, min_value=None):

@@ -1,13 +1,23 @@
 import os
+import warnings
 
 import cv2
 import dlib
 import numpy as np
-from skimage.io import imread, imsave
+from imageio.v3 import imread, imwrite
 from skimage.transform import rescale, estimate_transform, warp
 
 from Networks.predictor import MobilenetPosPredictor
 from Utils.write import write_obj_with_colors
+
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+
+
+def imsave_img(path, img):
+    """Save image, converting float [0,1] to uint8 if needed."""
+    if img.dtype in [np.float32, np.float64]:
+        img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+    imwrite(path, img)
 
 
 def mask_pos(pos):
@@ -142,14 +152,14 @@ def main():
         if front_img.shape != (256, 256, 3):
             max_size = max(front_img.shape[0], front_img.shape[1])
             if max_size > 1000:
-                front_img = rescale(front_img, 1000. / max_size)
+                front_img = rescale(front_img, 1000. / max_size, channel_axis=2)
                 front_img = (front_img * 255).astype(np.uint8)
             front_img = np.around(front_img, decimals=1).astype(np.uint8)
 
         if side_img.shape != (256, 256, 3):
             max_size = max(side_img.shape[0], side_img.shape[1])
             if max_size > 1000:
-                side_img = rescale(side_img, 1000. / max_size)
+                side_img = rescale(side_img, 1000. / max_size, channel_axis=2)
                 side_img = (side_img * 255).astype(np.uint8)
             side_img = np.around(side_img, decimals=1).astype(np.uint8)
 
@@ -158,8 +168,8 @@ def main():
 
         cropped_image_front = get_cropped_image(front_img, cropping_tform_front)
         cropped_image_side = get_cropped_image(side_img, cropping_tform_side)
-        imsave(images[0].replace('front', 'side_cropped'), cropped_image_side)
-        imsave(images[0].replace('front', 'front_cropped'), cropped_image_front)
+        imsave_img(images[0].replace('front', 'side_cropped'), cropped_image_side)
+        imsave_img(images[0].replace('front', 'front_cropped'), cropped_image_front)
         img_concat = np.concatenate((cropped_image_front, cropped_image_side), axis=2)
         cropped_pos = pos_predictor.predict(img_concat)
 
@@ -181,7 +191,7 @@ def main():
 
         masked_pos = mask_pos(pos)
         plotted_image = plot_vertices_on_image_from_pos(masked_pos, l68_front, front_img)
-        imsave(images[0].replace('front', 'projected'), plotted_image)
+        imsave_img(images[0].replace('front', 'projected'), plotted_image)
 
 
 if __name__ == '__main__':

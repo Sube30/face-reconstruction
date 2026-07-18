@@ -1,7 +1,7 @@
 import os
 
 import numpy as np
-from skimage.io import imsave
+from imageio.v3 import imwrite as imsave
 
 
 def write_asc(path, vertices):
