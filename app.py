@@ -36,31 +36,9 @@ def load_models():
         st.error("Model file not found: Data/net-data/model.onnx. Please ensure it is committed to the repository.")
         st.stop()
 
-    # OpenCV DNN face detector (SSD model bundled with opencv)
-    prototxt_path = os.path.join(os.path.dirname(cv2.__file__), 'data', 'deploy.prototxt')
-    caffemodel_path = os.path.join(os.path.dirname(cv2.__file__), 'data', 'res10_300x300_ssd_iter_140000_fp16.caffemodel')
-
-    # If not bundled at that path, download them
-    model_dir = 'Data/net-data'
-    if not os.path.exists(prototxt_path):
-        prototxt_path = os.path.join(model_dir, 'deploy.prototxt')
-    if not os.path.exists(caffemodel_path):
-        caffemodel_path = os.path.join(model_dir, 'res10_300x300_ssd_iter_140000_fp16.caffemodel')
-
-    if not os.path.exists(prototxt_path) or not os.path.exists(caffemodel_path):
-        # Download OpenCV's face detection model
-        import urllib.request
-        base_url = 'https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/'
-        raw_url = 'https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830/'
-        os.makedirs(model_dir, exist_ok=True)
-        if not os.path.exists(prototxt_path):
-            urllib.request.urlretrieve(base_url + 'deploy.prototxt', prototxt_path)
-        if not os.path.exists(caffemodel_path):
-            urllib.request.urlretrieve(
-                raw_url + 'res10_300x300_ssd_iter_140000_fp16.caffemodel',
-                caffemodel_path
-            )
-
+    # OpenCV DNN face detector (SSD ResNet-10, committed in repo)
+    prototxt_path = 'Data/net-data/deploy.prototxt'
+    caffemodel_path = 'Data/net-data/res10_300x300_ssd_iter_140000_fp16.caffemodel'
     face_net = cv2.dnn.readNetFromCaffe(prototxt_path, caffemodel_path)
 
     pos_predictor = MobilenetPosPredictor(256, 256)
