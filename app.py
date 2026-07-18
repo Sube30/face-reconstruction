@@ -3,7 +3,7 @@ import tempfile
 import warnings
 
 import cv2
-import dlib
+import mediapipe as mp
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
@@ -14,6 +14,33 @@ from Networks.predictor import MobilenetPosPredictor
 from Utils.write import write_obj_with_colors
 
 warnings.filterwarnings('ignore', category=DeprecationWarning)
+
+# --- MediaPipe 68-landmark mapping ---
+# Map MediaPipe's 468 face mesh indices to approximate dlib's 68 landmark points
+MEDIAPIPE_TO_68 = [
+    # Jaw (0-16)
+    162, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323,
+    # This is approximate - we use 17 jaw points
+    # Left eyebrow (17-21)
+    70, 63, 105, 66, 107,
+    # Right eyebrow (22-26)
+    336, 296, 334, 293, 300,
+    # Nose bridge (27-30)
+    168, 6, 197, 195,
+    # Nose bottom (31-35)
+    5, 4, 1, 19, 94,
+    # Left eye (36-41)
+    33, 160, 158, 133, 153, 144,
+    # Right eye (42-47)
+    362, 385, 387, 263, 373, 380,
+    # Outer lips (48-59)
+    61, 39, 37, 0, 267, 269, 291, 405, 314, 17, 84, 181,
+    # Inner lips (60-67)
+    78, 82, 13, 312, 308, 317, 14, 87,
+]
+# Trim to exactly 68 points
+MEDIAPIPE_TO_68 = MEDIAPIPE_TO_68[:68]
+
 
 # --- Page config ---
 st.set_page_config(
@@ -32,12 +59,11 @@ st.markdown(
 @st.cache_resource(show_spinner="Loading models...")
 def load_models():
     model_path = 'Data/net-data/trained_fg_then_real.h5'
-    face_detector_path = 'Data/net-data/mmod_human_face_detector.dat'
-    shape_predictor_path = 'Data/net-data/shape_predictor_68_face_landmarks.dat'
 
     # Auto-download model files if not present (for cloud deployment)
     os.makedirs('Data/net-data', exist_ok=True)
-    if not os.path.exists(model_path) or not os.path.exists(shape_predictor_path):
+    onnx_path = model_path.replace('.h5', '.onnx')
+    if not os.path.exists(onnx_path) and not os.path.exists(model_path):
         try:
             import gdown
             gdown.download_folder(
@@ -48,8 +74,7 @@ def load_models():
             st.error(f"Failed to download model files: {e}. Please add them manually to Data/net-data/")
             st.stop()
 
-    # Convert h5 to onnx if onnx not present (needed for Python 3.14+ where TF unavailable)
-    onnx_path = model_path.replace('.h5', '.onnx')
+    # Convert h5 to onnx if onnx not present
     if not os.path.exists(onnx_path) and os.path.exists(model_path):
         try:
             import tensorflow as tf
@@ -59,11 +84,17 @@ def load_models():
             spec = (tf.TensorSpec((1, 256, 256, 6), tf.float32),)
             tf2onnx.convert.from_keras(tf_model, input_signature=spec, output_path=onnx_path)
         except ImportError:
-            st.error("ONNX model not found and TensorFlow not available to convert. Please provide model.onnx")
+            st.error("ONNX model not found and TensorFlow not available to convert. Please provide the .onnx model file.")
             st.stop()
 
-    face_detector = dlib.cnn_face_detection_model_v1(face_detector_path)
-    shape_predictor = dlib.shape_predictor(shape_predictor_path)
+    # Initialize MediaPipe Face Mesh
+    mp_face_mesh = mp.solutions.face_mesh
+    face_mesh = mp_face_mesh.FaceMesh(
+        static_image_mode=True,
+        max_num_faces=1,
+        refine_landmarks=True,
+        min_detection_confidence=0.5,
+    )
 
     pos_predictor = MobilenetPosPredictor(256, 256)
     pos_predictor.restore(model_path)
@@ -71,10 +102,10 @@ def load_models():
     triangles = np.loadtxt('Data/uv-data/triangles.txt').astype(np.int32)
     face_ind = np.loadtxt('Data/uv-data/face_ind.txt').astype(np.int32)
 
-    return face_detector, shape_predictor, pos_predictor, triangles, face_ind
+    return face_mesh, pos_predictor, triangles, face_ind
 
 
-# --- Helper functions (from demo.py) ---
+# --- Helper functions ---
 def mask_pos(pos):
     mask_path = 'Data/uv-data/facegen_face_mask.png'
     mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
@@ -84,24 +115,38 @@ def mask_pos(pos):
     return masked_pos
 
 
-def get_cropping_transformation(image, face_detector, shape_predictor):
-    detected_faces = face_detector(image, 1)
-    if len(detected_faces) == 0:
+def get_cropping_transformation(image, face_mesh):
+    """Detect face and extract 68 landmarks using MediaPipe, then compute cropping transform."""
+    h, w, _ = image.shape
+    # MediaPipe expects RGB
+    results = face_mesh.process(image)
+
+    if not results.multi_face_landmarks:
         return None
 
-    d = detected_faces[0].rect
-    left = d.left()
-    right = d.right()
-    top = d.top()
-    bottom = d.bottom()
+    landmarks = results.multi_face_landmarks[0]
+
+    # Extract all 468 landmarks as pixel coords
+    all_lm = np.array([(lm.x * w, lm.y * h) for lm in landmarks.landmark])
+
+    # Map to 68-point subset
+    coords = np.zeros((68, 2), dtype=int)
+    for i, mp_idx in enumerate(MEDIAPIPE_TO_68):
+        if mp_idx < len(all_lm):
+            coords[i] = all_lm[mp_idx].astype(int)
+
+    # Compute bounding box from landmarks
+    x_min, y_min = coords.min(axis=0)
+    x_max, y_max = coords.max(axis=0)
+
+    left = int(x_min)
+    right = int(x_max)
+    top = int(y_min)
+    bottom = int(y_max)
+
     old_size = (right - left + bottom - top) / 2
     center = np.array([right - (right - left) / 2.0, bottom - (bottom - top) / 2.0 + old_size * 0.14])
     size = int(old_size * 1.58)
-
-    shape = shape_predictor(image, d)
-    coords = np.zeros((68, 2), dtype=int)
-    for i in range(0, 68):
-        coords[i] = (shape.part(i).x, shape.part(i).y)
 
     src_pts = np.array([
         [center[0] - size / 2, center[1] - size / 2],
@@ -167,8 +212,8 @@ def plot_vertices_on_image_from_pos(pos, l68, front_img):
     return plotted_front_img
 
 
-def process_images(front_img, side_img, face_detector, shape_predictor, pos_predictor, triangles, face_ind):
-    """Run the full reconstruction pipeline. Returns (obj_content, projected_img, cropped_front, cropped_side, vertices_3d, colors_rgb)."""
+def process_images(front_img, side_img, face_mesh, pos_predictor, triangles, face_ind):
+    """Run the full reconstruction pipeline."""
 
     # Resize if too large
     if front_img.shape != (256, 256, 3):
@@ -186,12 +231,12 @@ def process_images(front_img, side_img, face_detector, shape_predictor, pos_pred
         side_img = np.around(side_img, decimals=1).astype(np.uint8)
 
     # Detect faces and get cropping transforms
-    result_front = get_cropping_transformation(front_img, face_detector, shape_predictor)
+    result_front = get_cropping_transformation(front_img, face_mesh)
     if result_front is None:
         raise ValueError("No face detected in the front image. Please try a different image.")
     l68_front, cropping_tform_front = result_front
 
-    result_side = get_cropping_transformation(side_img, face_detector, shape_predictor)
+    result_side = get_cropping_transformation(side_img, face_mesh)
     if result_side is None:
         raise ValueError("No face detected in the side image. Please try a different image.")
     l68_side, cropping_tform_side = result_side
@@ -239,29 +284,20 @@ def process_images(front_img, side_img, face_detector, shape_predictor, pos_pred
 
 
 # --- Load models ---
-face_detector, shape_predictor, pos_predictor, triangles, face_ind = load_models()
+face_mesh, pos_predictor, triangles, face_ind = load_models()
 
 
 def create_3d_point_cloud(vertices, colors):
     """Create an interactive 3D point cloud visualization using Plotly with interpolated mesh surface."""
-    # Convert colors to normalized [0,1] for plotly
-    colors_norm = colors.astype(np.float64) / 255.0
-
-    # Create interpolated mesh surface using Mesh3d with intensity-based coloring
-    # Use Delaunay triangulation via plotly's alphahull or provide triangles
     fig = go.Figure()
 
-    # Add mesh3d with vertex colors via facecolor interpolation
-    # We use i,j,k from the triangles array for proper mesh rendering
     from scipy.spatial import Delaunay
 
-    # Project to 2D (x,y) for triangulation since it's a face surface
     points_2d = vertices[:, :2]
     try:
         tri = Delaunay(points_2d)
         simplices = tri.simplices
 
-        # Compute face colors by averaging vertex colors for each triangle
         face_colors = []
         for s in simplices:
             r = int(np.mean(colors[s, 0]))
@@ -283,7 +319,6 @@ def create_3d_point_cloud(vertices, colors):
             opacity=1.0,
         ))
     except Exception:
-        # Fallback to point cloud if triangulation fails
         color_strings = [f'rgb({r},{g},{b})' for r, g, b in colors]
         fig.add_trace(go.Scatter3d(
             x=vertices[:, 0],
@@ -308,6 +343,7 @@ def create_3d_point_cloud(vertices, colors):
     )
 
     return fig
+
 
 # --- Sidebar: choose input mode ---
 st.sidebar.header("Input")
@@ -364,7 +400,7 @@ if front_img is not None and side_img is not None:
         with st.spinner("Processing... (this may take a moment on CPU)"):
             try:
                 obj_content, projected_img, cropped_front, cropped_side, vertices_3d, colors_rgb = process_images(
-                    front_img, side_img, face_detector, shape_predictor,
+                    front_img, side_img, face_mesh,
                     pos_predictor, triangles, face_ind
                 )
 
